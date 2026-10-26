@@ -167,10 +167,28 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let link = root.appendingPathComponent("Display Monitor.app")
+        // Foundation does not resolve dangling links. Use any existing app in
+        // /Applications (for example Xcode on CI), never require Display Monitor
+        // to have been installed and never write to the system app directory.
+        let applications = try FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: "/Applications"), includingPropertiesForKeys: nil)
+        guard let target = applications.first(where: {
+            $0.pathExtension == "app"
+                && $0.resolvingSymlinksInPath().deletingLastPathComponent().path == "/Applications"
+        }) else {
+            throw XCTSkip("The symlink check needs an existing app in /Applications")
+        }
+        let link = root.appendingPathComponent("LaunchPolicyFixture.app")
         try FileManager.default.createSymbolicLink(atPath: link.path,
-            withDestinationPath: "/Applications/Display Monitor.app")
+            withDestinationPath: target.path)
         XCTAssertNil(MenuBarHidingLaunchPolicy.unavailableReason(applicationURL: link))
+
+        let outside = root.appendingPathComponent("Outside.app")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let outsideLink = root.appendingPathComponent("OutsideLink.app")
+        try FileManager.default.createSymbolicLink(atPath: outsideLink.path,
+            withDestinationPath: outside.path)
+        XCTAssertNotNil(MenuBarHidingLaunchPolicy.unavailableReason(applicationURL: outsideLink))
     }
 
     func testSettingsCollapseCommandUsesExecutionStateNotFailedStartupIntent() async throws {
