@@ -101,7 +101,7 @@ final class ScreenshotDocumentRendererTests: XCTestCase {
         for (index, entry) in focusedKinds {
             let snapshot = ScreenshotRenderSnapshot(source: source, stateID: UUID(), cropRect: crop,
                 annotations: [makeNode(entry.kind, index: index)])
-            let raw = try await Task.detached(priority: .userInitiated) {
+            let raw = try await Task.detached(priority: .userInitiated) { @Sendable in
                 let renderer = ScreenshotDocumentRenderer(snapshot: snapshot)
                 let full = try Self.rawPixels(renderer.renderBand(CGRect(origin: .zero, size: crop.size)))
                 var stitched = [UInt8](repeating: 0, count: 160 * 240 * 4)
@@ -139,7 +139,7 @@ final class ScreenshotDocumentRendererTests: XCTestCase {
             assertPixels(tiled.pixels, equalTo: full.pixels, width: 600, tolerance: 1,
                          label: "canonical X/Y seams, band=\(height) halo=\(halo)")
         }
-        let reuse = try await Task.detached(priority: .userInitiated) {
+        let reuse = try await Task.detached(priority: .userInitiated) { @Sendable in
             let renderer = ScreenshotDocumentRenderer(snapshot: snapshot)
             _ = try renderer.renderBand(CGRect(x: 0, y: 10, width: 600, height: 7))
             let first = renderer.canonicalTileRenderCount
@@ -164,7 +164,7 @@ final class ScreenshotDocumentRendererTests: XCTestCase {
         for (name, kind) in kinds {
             let snapshot = ScreenshotRenderSnapshot(source: source, stateID: UUID(), cropRect: crop,
                 annotations: [makeNode(kind, index: 0)])
-            let result = try await Task.detached(priority: .userInitiated) {
+            let result = try await Task.detached(priority: .userInitiated) { @Sendable in
                 let expected = try Self.singleSurfacePixels(snapshot)
                 let actual = try Self.rawPixels(ScreenshotDocumentRenderer(snapshot: snapshot).renderBand(
                     CGRect(origin: .zero, size: crop.size)))
@@ -182,7 +182,7 @@ final class ScreenshotDocumentRendererTests: XCTestCase {
     }
 
     private func backgroundFullBitmap(_ snapshot: ScreenshotRenderSnapshot) async throws -> Decoded {
-        let result = try await Task.detached(priority: .userInitiated) {
+        let result = try await Task.detached(priority: .userInitiated) { @Sendable in
             let wasMainThread = pthread_main_np() != 0
             let data = try ScreenshotDocumentRenderer(snapshot: snapshot).pngData(strategy: .fullBitmap)
             return (wasMainThread, data)
@@ -196,7 +196,7 @@ final class ScreenshotDocumentRendererTests: XCTestCase {
         // Force narrow bands without allocating a huge fixture. The production
         // planner accounts for six RGBA surfaces and the shared fixed scratch reserve.
         let budget = ScreenshotTiledRasterPlan.fixedWorkingReserveBytes + width * 24 * (bandHeight + 2 * halo)
-        let result = try await Task.detached(priority: .userInitiated) {
+        let result = try await Task.detached(priority: .userInitiated) { @Sendable in
             let wasMainThread = pthread_main_np() != 0
             let data = try ScreenshotDocumentRenderer(snapshot: snapshot).pngData(
                 strategy: .tiled(maximumWorkingBytes: budget, haloRows: halo)

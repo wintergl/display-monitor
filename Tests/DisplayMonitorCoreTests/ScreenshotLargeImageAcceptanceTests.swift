@@ -32,7 +32,7 @@ final class ScreenshotLargeImageAcceptanceTests: XCTestCase {
         let name = "100m-tiled-export-\(UUID().uuidString)"
         let output = reportDirectory.appendingPathComponent(name + ".png")
         let report = reportDirectory.appendingPathComponent(name + ".json")
-        let result = try await Task.detached(priority: .userInitiated) {
+        let result = try await Task.detached(priority: .userInitiated) { @Sendable in
             let before = Self.memory()
             let began = Date()
             let renderer = ScreenshotDocumentRenderer(snapshot: snapshot)
