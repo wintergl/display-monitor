@@ -1,0 +1,37 @@
+name: Bug report / 问题反馈
+description: Report a reproducible problem without private data.
+title: "[Bug] "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App version/build and macOS version
+      placeholder: "0.1.1 (59), macOS 27.0.1, Apple Silicon"
+    validations:
+      required: true
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Affected feature
+      options:
+        - Menu bar collapse / ordering
+        - Screenshot / editor / pinning
+        - Scrolling screenshot
+        - Region recording
+        - Display preview / pointer control
+        - Build / installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected result, and actual result
+      description: For menu bar issues, include launch location and permission status. Use synthetic content.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Relevant diagnostics
+      description: Remove account details, serial numbers, internal URLs, and private screen content before sharing.

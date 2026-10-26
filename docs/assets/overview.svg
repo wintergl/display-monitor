@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+<title id="title">Display Monitor — menu bar, screenshots, and recording</title>
+<desc id="desc">Illustration of a menu bar with a collapsed icon group, a screenshot selection, a recording control, and a floating display preview. Not an app screenshot.</desc>
+<defs>
+<linearGradient id="bg" x2="1" y2="1"><stop stop-color="#111c35"/><stop offset="1" stop-color="#111b2c"/></linearGradient>
+<linearGradient id="blue" x2="1" y2="1"><stop stop-color="#88bcff"/><stop offset="1" stop-color="#6de4cf"/></linearGradient>
+<linearGradient id="wall" x2="1" y2="1"><stop stop-color="#24466b"/><stop offset="1" stop-color="#263c73"/></linearGradient>
+</defs>
+<rect width="1280" height="760" rx="24" fill="url(#bg)"/>
+<g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
+<text x="64" y="73" fill="#a5c4ed" font-size="16" font-weight="600" letter-spacing="3">DISPLAY MONITOR / FOR macOS</text>
+<text x="64" y="139" fill="#f4f8ff" font-size="48" font-weight="700">Make room. Capture more.</text>
+<text x="65" y="183" fill="#b5c5dc" font-size="22">Menu bar management, screenshots, recording, and a second screen in view.</text>
+<rect x="64" y="225" width="1152" height="115" rx="20" fill="#1f2d45" stroke="#3a4b65"/>
+<text x="91" y="258" fill="#9cb3ce" font-size="13" font-weight="600" letter-spacing="2">COLLAPSE THE CLUTTER</text>
+<rect x="90" y="275" width="1100" height="42" rx="12" fill="#34445e"/>
+<circle cx="113" cy="296" r="6" fill="#dde9fa"/>
+<text x="137" y="301" fill="#e0eafb" font-size="15" font-weight="600">Finder</text>
+<text x="205" y="301" fill="#aabfd8" font-size="14">File</text><text x="245" y="301" fill="#aabfd8" font-size="14">Edit</text>
+<rect x="785" y="283" width="141" height="26" rx="7" fill="#24344e"/>
+<text x="804" y="301" fill="#a8c5eb" font-size="13">··· hidden icons</text>
+<rect x="943" y="282" width="33" height="28" rx="8" fill="url(#blue)"/>
+<path d="M953 296h12m-5-5 5 5-5 5" stroke="#173551" stroke-width="2" fill="none"/>
+<circle cx="1004" cy="296" r="5" fill="#d4e2f4"/><path d="M1029 296h14m-7-7v14" stroke="#d4e2f4" stroke-width="2"/>
+<text x="1070" y="301" fill="#edf4ff" font-size="14">Mon 10:26</text>
+<g transform="translate(64 368)">
+<rect width="356" height="286" rx="20" fill="#1b2a42" stroke="#35485f"/>
+<rect x="24" y="24" width="308" height="153" rx="12" fill="url(#wall)"/>
+<rect x="64" y="53" width="225" height="99" rx="4" fill="none" stroke="#8acbff" stroke-width="2" stroke-dasharray="6 5"/>
+<rect x="84" y="72" width="140" height="9" rx="4" fill="#7c9dc4"/><rect x="84" y="94" width="175" height="6" rx="3" fill="#5b7caa"/><rect x="84" y="111" width="151" height="6" rx="3" fill="#5b7caa"/>
+<path d="m244 121 12 12 27-31" fill="none" stroke="#82dfcf" stroke-width="4"/>
+<text x="25" y="215" fill="#f0f6ff" font-size="23" font-weight="650">Capture &amp; annotate</text>
+<text x="25" y="247" fill="#aabed7" font-size="16">Region · window · scrolling capture</text>
+</g>
+<g transform="translate(462 368)">
+<rect width="356" height="286" rx="20" fill="#1b2a42" stroke="#35485f"/>
+<rect x="24" y="24" width="308" height="153" rx="12" fill="url(#wall)"/>
+<path d="M48 149c60-86 105-35 147-69s66-13 113-35" stroke="#779dce" stroke-width="3" fill="none"/>
+<rect x="75" y="85" width="207" height="53" rx="13" fill="#17243a" stroke="#526881"/>
+<circle cx="102" cy="112" r="7" fill="#ff737b"/>
+<text x="123" y="118" fill="#ecf4ff" font-size="18" font-family="monospace">00:12</text>
+<path d="M213 103v18m7-18v18" stroke="#c9ddf5" stroke-width="3"/>
+<rect x="247" y="104" width="15" height="15" rx="3" fill="#d4e4f8"/>
+<text x="25" y="215" fill="#f0f6ff" font-size="23" font-weight="650">Record a region</text>
+<text x="25" y="247" fill="#aabed7" font-size="16">Select an area · save an MP4</text>
+</g>
+<g transform="translate(860 368)">
+<rect width="356" height="286" rx="20" fill="#1b2a42" stroke="#35485f"/>
+<rect x="24" y="24" width="308" height="153" rx="12" fill="url(#wall)"/>
+<rect x="52" y="43" width="249" height="113" rx="9" fill="#16243a" stroke="#6d91bb"/>
+<rect x="65" y="57" width="221" height="73" rx="4" fill="#3d6388"/>
+<path d="m65 130 65-48 50 27 47-34 59 55" fill="#5b8baf"/>
+<circle cx="278" cy="146" r="3" fill="#85e1ce"/>
+<text x="25" y="215" fill="#f0f6ff" font-size="23" font-weight="650">Keep another screen close</text>
+<text x="25" y="247" fill="#aabed7" font-size="16">Floating preview · optional control</text>
+</g>
+<text x="64" y="710" fill="#a2b7d0" font-size="16">Native Swift  /  MIT licensed  /  github.com/wintergl/display-monitor</text>
+<text x="1216" y="710" fill="#7288a3" font-size="12" text-anchor="end">Feature illustration</text>
+</g></svg>

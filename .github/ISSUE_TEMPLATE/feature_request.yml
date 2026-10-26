@@ -1,0 +1,13 @@
+name: Feature request / 功能建议
+description: Describe the task you want to make easier.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested behavior

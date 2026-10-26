@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use or build on Display Monitor, please cite this repository."
+type: software
+title: "Display Monitor: menu bar management, screenshots, and recording for macOS"
+authors:
+  - name: "wintergl"
+version: 0.1.1
+date-released: 2026-10-26
+url: "https://github.com/wintergl/display-monitor"
+repository-code: "https://github.com/wintergl/display-monitor"
+license: MIT
+keywords:
+  - macOS
+  - menu bar
+  - screenshot
+  - screen recording
+  - Swift

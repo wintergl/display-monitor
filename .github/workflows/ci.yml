@@ -1,0 +1,27 @@
+name: macOS checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Public source audit
+        run: python3 script/audit_public_source.py
+      - name: Build app bundle
+        run: ./script/build_and_run.sh --release-build-only
+      - name: Tests
+        run: swift test
