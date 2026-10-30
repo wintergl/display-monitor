@@ -36,6 +36,44 @@ final class MenuBarAutomaticCollapseRecoveryTests: XCTestCase {
         XCTAssertNil(cancelled.nextRetryDelay())
     }
 
+    func testUnavailableLayoutContinuesWithCappedSlowChecksAfterFastRetries() {
+        var recovery = MenuBarAutomaticCollapseRecovery()
+        recovery.begin()
+        for delay: Duration in [.seconds(1), .seconds(2), .seconds(4)] {
+            XCTAssertEqual(recovery.nextRetryDelay(waitForStability: true), delay)
+            XCTAssertFalse(recovery.isWaitingForStability)
+        }
+        for delay: Duration in [.seconds(15), .seconds(30), .seconds(60), .seconds(60)] {
+            XCTAssertEqual(recovery.nextRetryDelay(waitForStability: true), delay)
+            XCTAssertTrue(recovery.isWaitingForStability)
+        }
+        XCTAssertEqual(recovery.retryCount, 3)
+        XCTAssertEqual(recovery.stabilityWaitCount, 3)
+    }
+
+    func testSlowChecksStopOnCancellationSuccessOrNativeFailure() {
+        for stop in 0..<3 {
+            var recovery = MenuBarAutomaticCollapseRecovery()
+            recovery.begin()
+            for _ in 0..<4 { _ = recovery.nextRetryDelay(waitForStability: true) }
+            if stop == 0 { recovery.cancel() }
+            if stop == 1 { recovery.succeeded() }
+            if stop == 2 { XCTAssertNil(recovery.nextRetryDelay(waitForStability: false)) }
+            XCTAssertFalse(recovery.isWaitingForStability)
+            XCTAssertNil(recovery.nextRetryDelay(waitForStability: true))
+        }
+    }
+
+    func testNewIntentRestartsFastBudgetAfterSlowWaiting() {
+        var recovery = MenuBarAutomaticCollapseRecovery()
+        recovery.begin()
+        for _ in 0..<5 { _ = recovery.nextRetryDelay(waitForStability: true) }
+        recovery.begin()
+        XCTAssertFalse(recovery.isWaitingForStability)
+        XCTAssertEqual(recovery.stabilityWaitCount, 0)
+        XCTAssertEqual(recovery.nextRetryDelay(waitForStability: true), .seconds(1))
+    }
+
     func testBeginningNewCycleResetsRetryBudget() {
         var recovery = MenuBarAutomaticCollapseRecovery()
         recovery.begin()

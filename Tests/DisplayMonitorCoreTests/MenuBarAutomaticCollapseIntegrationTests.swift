@@ -230,6 +230,54 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
         await fixture.finish(coordinator)
     }
 
+    func testCorroboratedVirtualReplicaReachesNativeOnlyAfterTwoFreshCompleteProofs() async throws {
+        let fixture = Fixture()
+        fixture.rawEnabled = true
+        fixture.additionalApplications = [.init(bundleIdentifier: "example.virtual", name: "Virtual", processIdentifier: 77)]
+        let base = fixture.rawPhysicalResult(opaque: true)
+        let candidate = MenuBarReplicaCandidate(processIdentifier: 77,
+            frame: CGRect(x: 0, y: 0, width: 5, height: 24), identifier: nil)
+        let nodes = base.model.nodes.map { node in
+            guard node.path.isEmpty else { return node }
+            return MenuBarRawPhysicalNode(path: [], processIdentifier: node.processIdentifier,
+                role: node.role, identifier: node.identifier, frame: node.frame,
+                position: node.position, size: node.size,
+                children: .value([.node(path: [0]), .node(path: [1])]))
+        } + [MenuBarRawPhysicalNode(path: [1], processIdentifier: .value(500), role: .value("AXWindow"),
+            identifier: .absent, frame: .value(.init(x: 0, y: 0, width: 100, height: 24)),
+            position: .absent, size: .absent, children: .value([
+                .reference(firstPath: [0, 0]), .reference(firstPath: [0, 1]),
+                .node(path: [1, 3])])),
+            MenuBarRawPhysicalNode(path: [1, 3], processIdentifier: .value(500), role: .absent,
+                identifier: .absent, frame: .value(.init(x: 0, y: 0, width: 5, height: 24)),
+                position: .absent, size: .absent, children: .value([.node(path: [1, 3, 0])])),
+            MenuBarRawPhysicalNode(path: [1, 3, 0], processIdentifier: .value(77), role: .absent,
+                identifier: .absent, frame: .absent, position: .absent, size: .absent,
+                children: .absent, isOpaqueApplicationProxy: true)]
+        let raw = MenuBarRawPhysicalStructureSnapshot(model: .init(
+            providerProcessIdentifier: base.model.providerProcessIdentifier,
+            displays: base.model.displays, nodes: nodes))
+        let proof = MenuBarOffscreenReplicaEvidence(rawRevision: raw.revision, candidate: candidate,
+            bundleIdentifier: "example.virtual", ownerItemFrames: [CGRect(x: -160, y: 0, width: 24, height: 24)],
+            focusedProcessIdentifier: 999, hits: candidate.samplePoints.map {
+                .init(point: $0, processIdentifier: 999, role: "AXMenuBar",
+                      frame: CGRect(x: 0, y: 0, width: 100, height: 24))
+            }, sampledAtUptime: ProcessInfo.processInfo.systemUptime)
+        XCTAssertEqual(MenuBarPhysicalInventoryEvidence.replicaDifferenceCandidates(snapshot: raw), [candidate])
+        fixture.rawResults = Array(repeating: .init(model: raw.model, offscreenReplicaEvidence: [proof]), count: 2)
+        let coordinator = try fixture.coordinator()
+        coordinator.ownedStatusItemEvidence = {
+            .init(processIdentifier: ProcessInfo.processInfo.processIdentifier, mainEntryVisible: true, visibleItemCount: 1)
+        }
+        coordinator.prepare()
+        await eventually { coordinator.isCollapsed }
+        XCTAssertEqual(fixture.rawReadCount, 2)
+        XCTAssertEqual(fixture.beginCount, 1)
+        XCTAssertEqual(fixture.plans[0].targetBundleIdentifiers, ["example.target", "example.virtual"])
+        XCTAssertEqual(coordinator.inventory?.items.count, 3)
+        await fixture.finish(coordinator)
+    }
+
     func testRejectedStartupPhysicalProofDoesNotLoopBackIntoBootstrap() async throws {
         let fixture = Fixture()
         fixture.rawEnabled = true
@@ -266,7 +314,7 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
         await fixture.finish(coordinator)
     }
 
-    func testRepeatedPhysicalBootstrapFailureDoesNotResetRetryBudget() async throws {
+    func testRepeatedPhysicalBootstrapFailureTransitionsToSlowChecksWithoutResettingFastBudget() async throws {
         let fixture = Fixture()
         fixture.rawEnabled = true
         fixture.rawResults = Array(repeating: fixture.rawResult(complete: false), count: 20)
@@ -277,7 +325,7 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
                   mainEntryVisible: true, visibleItemCount: 1)
         }
         coordinator.prepare()
-        await eventually { coordinator.message.contains("自动重试 3 次仍未就绪") }
+        await eventually { fixture.delays.contains(.seconds(15)) }
         XCTAssertEqual(fixture.beginCount, 0)
         XCTAssertEqual(fixture.rawReadCount, 8)
         XCTAssertEqual(fixture.scanCount, 4)
@@ -286,6 +334,166 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
         }
         XCTAssertTrue(coordinator.wantsPersistentCollapse)
         await fixture.finish(coordinator)
+    }
+
+    func testWakeAutomaticallyRecoversWhenPhysicalLayoutBecomesValidAfterFastRetries() async throws {
+        let fixture = Fixture()
+        fixture.rawEnabled = true
+        fixture.rawResults = Array(repeating: fixture.rawPhysicalResult(opaque: true), count: 2)
+        var releaseSlowCheck = false
+        fixture.beforeStabilitySleep = { _ in
+            while !releaseSlowCheck { try await Task.sleep(for: .milliseconds(1)) }
+        }
+        let coordinator = try fixture.coordinator()
+        coordinator.ownedStatusItemEvidence = {
+            .init(processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                  mainEntryVisible: true, visibleItemCount: 1)
+        }
+        coordinator.prepare()
+        await eventually { coordinator.isCollapsed }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        await eventually { !coordinator.isCollapsed }
+        XCTAssertTrue(fixture.assertions[0].invalidated)
+        // Match the production failure: attribute reads can be "complete"
+        // while the graph still has no safe physical menu-bar roots.
+        fixture.rawResults = Array(repeating: fixture.rawResult(), count: 8)
+        fixture.results = Array(repeating: fixture.result(complete: false), count: 4)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
+        await eventually { fixture.delays.contains(.seconds(15)) }
+        XCTAssertEqual(fixture.beginCount, 1)
+        XCTAssertGreaterThanOrEqual(fixture.rawReadCount, 8)
+        XCTAssertFalse(coordinator.isCollapsed)
+
+        let readsBeforeRecovery = fixture.rawReadCount
+        fixture.rawResults = Array(repeating: fixture.rawPhysicalResult(opaque: true), count: 2)
+        releaseSlowCheck = true
+        await eventually { coordinator.isCollapsed && fixture.beginCount == 2 }
+        XCTAssertEqual(fixture.rawReadCount, readsBeforeRecovery + 2,
+                       "Recovery must obtain two NEW complete physical proofs")
+        XCTAssertEqual(fixture.activityReadCount, 1)
+        XCTAssertEqual(coordinator.userVisibilityIntent, .collapsed)
+        XCTAssertTrue(coordinator.wantsPersistentCollapse)
+        await fixture.finish(coordinator)
+    }
+
+    func testSingleEntryClickAfterFailedCollapseImmediatelyRetriesFreshPhysicalProof() async throws {
+        let fixture = Fixture()
+        fixture.rawEnabled = true
+        fixture.rawResults = Array(repeating: fixture.rawResult(complete: false), count: 8)
+        fixture.results = Array(repeating: fixture.result(complete: false), count: 4)
+        let coordinator = try fixture.coordinator()
+        coordinator.ownedStatusItemEvidence = {
+            .init(processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                  mainEntryVisible: true, visibleItemCount: 1)
+        }
+        coordinator.prepare()
+        await eventually { fixture.delays.contains(.seconds(15)) }
+        fixture.rawResults = Array(repeating: fixture.rawPhysicalResult(opaque: true), count: 2)
+        coordinator.toggleCurrentCollapseVisibility()
+        await eventually { coordinator.isCollapsed }
+        XCTAssertEqual(fixture.beginCount, 1)
+        XCTAssertEqual(fixture.rawReadCount, 10)
+        XCTAssertEqual(coordinator.userVisibilityIntent, .collapsed)
+        XCTAssertTrue(fixture.revealDelays.isEmpty, "A failed-hide click must not start another reveal deadline")
+        XCTAssertEqual(fixture.cancelledStabilitySleeps, 1)
+        await fixture.finish(coordinator)
+    }
+
+    func testRetryClickDoesNotHideWhileFreshPhysicalProofStillFails() async throws {
+        let fixture = Fixture()
+        fixture.rawEnabled = true
+        fixture.rawResults = Array(repeating: fixture.rawResult(), count: 30)
+        fixture.results = Array(repeating: fixture.result(complete: false), count: 20)
+        let coordinator = try fixture.coordinator()
+        coordinator.ownedStatusItemEvidence = {
+            .init(processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                  mainEntryVisible: true, visibleItemCount: 1)
+        }
+        coordinator.prepare()
+        await eventually { fixture.delays.filter { $0 == .seconds(15) }.count == 1 }
+        coordinator.toggleCurrentCollapseVisibility()
+        await eventually { fixture.delays.filter { $0 == .seconds(15) }.count == 2 }
+        XCTAssertEqual(fixture.beginCount, 0)
+        XCTAssertFalse(coordinator.isCollapsed)
+        XCTAssertEqual(coordinator.userVisibilityIntent, .collapsed)
+        XCTAssertTrue(fixture.revealDelays.isEmpty)
+        await fixture.finish(coordinator)
+    }
+
+    func testSingleEntryClickAfterNativeTimeoutRestartsBoundedSafeAttempt() async throws {
+        let fixture = Fixture()
+        fixture.nativeNeverCompletes = true
+        let coordinator = try fixture.coordinator()
+        coordinator.prepare()
+        await eventually { coordinator.message.contains("自动重试 3 次仍未就绪") }
+        XCTAssertEqual(fixture.beginCount, 4)
+        fixture.nativeNeverCompletes = false
+        coordinator.toggleCurrentCollapseVisibility()
+        await eventually { coordinator.isCollapsed }
+        XCTAssertEqual(fixture.beginCount, 5)
+        XCTAssertTrue(fixture.assertions.prefix(4).allSatisfy(\.invalidated))
+        XCTAssertFalse(fixture.assertions[4].invalidated)
+        XCTAssertEqual(coordinator.userVisibilityIntent, .collapsed)
+        XCTAssertTrue(fixture.revealDelays.isEmpty)
+        await fixture.finish(coordinator)
+    }
+
+    func testSlowRecoveryWaitsForIdleBeforeReadingOrHiding() async throws {
+        let blockedStates = [
+            MenuBarAutomaticRecollapseActivitySnapshot(isReadable: true, pointerInsideMenuBar: true, hasPressedMouseButtons: false, hasOpenMenuOrPopover: false),
+            MenuBarAutomaticRecollapseActivitySnapshot(isReadable: true, pointerInsideMenuBar: false, hasPressedMouseButtons: true, hasOpenMenuOrPopover: false),
+            MenuBarAutomaticRecollapseActivitySnapshot(isReadable: true, pointerInsideMenuBar: false, hasPressedMouseButtons: false, hasOpenMenuOrPopover: true),
+            MenuBarAutomaticRecollapseActivitySnapshot(isReadable: false, pointerInsideMenuBar: false, hasPressedMouseButtons: false, hasOpenMenuOrPopover: false),
+        ]
+        for blocked in blockedStates {
+            let fixture = Fixture()
+            fixture.rawEnabled = true
+            fixture.rawResults = Array(repeating: fixture.rawResult(complete: false), count: 8)
+            fixture.results = Array(repeating: fixture.result(complete: false), count: 4)
+            fixture.activities = [blocked]
+            var releaseSlowCheck = false
+            fixture.beforeStabilitySleep = { delay in
+                if delay > .seconds(15) {
+                    while !releaseSlowCheck { try await Task.sleep(for: .milliseconds(1)) }
+                }
+            }
+            let coordinator = try fixture.coordinator()
+            coordinator.ownedStatusItemEvidence = {
+                .init(processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                      mainEntryVisible: true, visibleItemCount: 1)
+            }
+            coordinator.prepare()
+            await eventually { fixture.delays.contains(.seconds(30)) }
+            XCTAssertEqual(fixture.rawReadCount, 8)
+            XCTAssertEqual(fixture.beginCount, 0)
+            fixture.rawResults = Array(repeating: fixture.rawPhysicalResult(opaque: true), count: 2)
+            releaseSlowCheck = true
+            await eventually { coordinator.isCollapsed }
+            XCTAssertEqual(fixture.rawReadCount, 10)
+            await fixture.finish(coordinator)
+        }
+    }
+
+    func testRevealDisableTerminationAndSleepCancelSlowRecovery() async throws {
+        for action in 0..<5 {
+            let fixture = Fixture()
+            fixture.results = Array(repeating: fixture.result(complete: false), count: 4)
+            let coordinator = try fixture.coordinator()
+            coordinator.prepare()
+            await eventually { fixture.delays.contains(.seconds(15)) }
+            switch action {
+            case 0: coordinator.revealTemporarily()
+            case 1: coordinator.setEnabled(false)
+            case 2: coordinator.setPersistentCollapseDesired(false)
+            case 3: coordinator.beginTermination()
+            default:
+                NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+            }
+            await eventually { fixture.cancelledStabilitySleeps == 1 }
+            XCTAssertEqual(fixture.beginCount, 0)
+            XCTAssertFalse(coordinator.isCollapsed)
+            await fixture.finish(coordinator)
+        }
     }
     func testDemoParityDoesNotUndoNativeRequestForUnreadableDiagnosticAX() async throws {
         let fixture = Fixture()
@@ -2132,6 +2340,8 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
         var heldRetryWasCancelled = false
         var onSleep: ((Int) -> Void)?
         var beforeSleep: ((Int) async throws -> Void)?
+        var beforeStabilitySleep: ((Duration) async throws -> Void)?
+        var cancelledStabilitySleeps = 0
         var beforeDiscover: ((Int) async -> Void)?
         var liveTopology: MenuBarTopologySnapshot?
         var topologySnapshots: [MenuBarTopologySnapshot] = []
@@ -2251,7 +2461,15 @@ final class MenuBarAutomaticCollapseIntegrationTests: XCTestCase {
                 delays.append(delay)
                 onSleep?(delays.count)
                 try await beforeSleep?(delays.count)
-                if holdRetry, delays.count > 1 {
+                if delay >= .seconds(15) {
+                    do {
+                        if let beforeStabilitySleep { try await beforeStabilitySleep(delay) }
+                        else { try await Task.sleep(for: .seconds(30)) }
+                    } catch {
+                        cancelledStabilitySleeps += 1
+                        throw error
+                    }
+                } else if holdRetry, delays.count > 1 {
                     do { try await Task.sleep(for: .seconds(10)) }
                     catch { heldRetryWasCancelled = true; throw error }
                 } else {

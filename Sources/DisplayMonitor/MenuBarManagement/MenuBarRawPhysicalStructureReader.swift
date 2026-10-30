@@ -242,10 +242,12 @@ struct MenuBarRawPhysicalStructureSnapshot: Equatable, Sendable {
     let isComplete: Bool
     let nodeCount: Int
     let diagnostics: MenuBarRawPhysicalStructureDiagnostics
+    let offscreenReplicaEvidence: [MenuBarOffscreenReplicaEvidence]
 
     init(
         model: MenuBarRawPhysicalStructureModel,
-        diagnostics: MenuBarRawPhysicalStructureDiagnostics = .init()
+        diagnostics: MenuBarRawPhysicalStructureDiagnostics = .init(),
+        offscreenReplicaEvidence: [MenuBarOffscreenReplicaEvidence] = []
     ) {
         self.model = model
         revision = MenuBarRawPhysicalStructureRevision.make(
@@ -255,6 +257,7 @@ struct MenuBarRawPhysicalStructureSnapshot: Equatable, Sendable {
         isComplete = diagnostics.totalCount == 0 && model.hasNoFailedReads
         nodeCount = model.nodes.count
         self.diagnostics = diagnostics
+        self.offscreenReplicaEvidence = offscreenReplicaEvidence
     }
 }
 
@@ -357,11 +360,13 @@ enum MenuBarRawPhysicalStructureReader {
 
     static func read(
         applications: [RunningAppSnapshot],
-        timeBudget: TimeInterval = 0.18
+        timeBudget: TimeInterval = 0.18,
+        frontmostProcessIdentifier: Int32? = nil
     ) -> MenuBarRawPhysicalStructureSnapshot {
         var scanner = Scanner(
             applications: applications,
-            timeBudget: min(max(0, timeBudget), 0.18)
+            timeBudget: min(max(0, timeBudget), 0.18),
+            frontmostProcessIdentifier: frontmostProcessIdentifier
         )
         return scanner.run()
     }
@@ -374,6 +379,7 @@ enum MenuBarRawPhysicalStructureReader {
         }
 
         private let applications: [RunningAppSnapshot]
+        private let frontmostProcessIdentifier: Int32?
         private let deadline: TimeInterval
         private let nodeLimit = 1_800
         private let depthLimit = 32
@@ -390,8 +396,9 @@ enum MenuBarRawPhysicalStructureReader {
             MenuBarRawPhysicalStructureFailureReason
         > = []
 
-        init(applications: [RunningAppSnapshot], timeBudget: TimeInterval) {
+        init(applications: [RunningAppSnapshot], timeBudget: TimeInterval, frontmostProcessIdentifier: Int32?) {
             self.applications = applications
+            self.frontmostProcessIdentifier = frontmostProcessIdentifier
             deadline = ProcessInfo.processInfo.systemUptime + timeBudget
         }
 
@@ -616,7 +623,18 @@ enum MenuBarRawPhysicalStructureReader {
                     diagnostics: diagnostics
                 )
             }
-            return snapshot
+            guard snapshot.isComplete else { return snapshot }
+            let evidence = MenuBarReplicaVisibilityReader.read(
+                snapshot: snapshot, applications: applications, deadline: deadline,
+                frontmostProcessIdentifier: frontmostProcessIdentifier
+            )
+            guard !evidence.isEmpty else { return snapshot }
+            guard ensureCanContinue() else {
+                return MenuBarRawPhysicalStructureSnapshot(model: model, diagnostics: diagnostics)
+            }
+            return MenuBarRawPhysicalStructureSnapshot(
+                model: model, diagnostics: diagnostics, offscreenReplicaEvidence: evidence
+            )
         }
 
         private mutating func readDisplays() -> [MenuBarRawPhysicalDisplay] {

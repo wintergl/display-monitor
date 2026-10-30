@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MenuBarVisibilityBridge
 import OSLog
@@ -68,9 +69,14 @@ struct MenuBarCollapseRuntime {
     var rawPhysicalStructure: @MainActor (
         [RunningAppSnapshot]
     ) async -> MenuBarRawPhysicalStructureSnapshot = { applications in
-        await MenuBarCollapseRuntime.performDetachedRead(priority: .userInitiated) {
-            MenuBarRawPhysicalStructureReader.read(applications: applications)
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let snapshot = await MenuBarCollapseRuntime.performDetachedRead(priority: .userInitiated) {
+            MenuBarRawPhysicalStructureReader.read(applications: applications, frontmostProcessIdentifier: frontmost)
         }
+        guard frontmost == NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            return MenuBarRawPhysicalStructureSnapshot(model: snapshot.model, diagnostics: snapshot.diagnostics)
+        }
+        return snapshot
     }
     var revealActivity: @MainActor () async -> MenuBarAutomaticRecollapseActivitySnapshot = {
         await MenuBarAutomaticRecollapseActivity.read()

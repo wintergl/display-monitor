@@ -51,6 +51,8 @@ The published Apple Silicon app is Developer ID signed and notarized. Source bui
 
 Shortcuts can be changed in Settings. Capture results support copy/save actions without opening a full editor first.
 
+Source build **0.1.1 (61)** adds safe recovery after layout changes, retry-on-click after a failed collapse, and independently verified menu bar replica reconciliation. See [the fix and validation scope](docs/MENU_BAR_RECOVERY.md). Existing release assets are unchanged.
+
 ## For builders
 
 ```sh

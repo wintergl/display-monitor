@@ -118,6 +118,9 @@ final class MenuBarManagementCoordinator: ObservableObject {
     private var automaticRecollapseID: UUID?
     private var automaticReadID: UUID?
     private var automaticRecovery = MenuBarAutomaticCollapseRecovery()
+    /// A failed attempt is distinct from an in-flight show/hide click. A new
+    /// click retries the failed request instead of revealing an already open bar.
+    private var collapseAttemptFailed = false
     private var explicitRecollapseGeneration: UInt64?
     private var temporaryRevealInteractionIDs: Set<UUID> = []
     private var pendingTemporaryRevealResolution = PendingTemporaryRevealResolution()
@@ -1162,11 +1165,13 @@ final class MenuBarManagementCoordinator: ObservableObject {
 
     @discardableResult
     private func setUserVisibilityIntent(
-        _ intent: MenuBarUserVisibilityIntent
+        _ intent: MenuBarUserVisibilityIntent,
+        restarting: Bool = false
     ) -> UInt64 {
-        guard userVisibilityIntent != intent else { return visibilityIntentGeneration }
+        guard userVisibilityIntent != intent || restarting else { return visibilityIntentGeneration }
         visibilityIntentGeneration &+= 1
         userVisibilityIntent = intent
+        collapseAttemptFailed = false
         changePresentation = nil
         if intent == .collapsed { cancelRevealedAutoRecollapse() }
         if intent == .revealed {
@@ -1191,7 +1196,14 @@ final class MenuBarManagementCoordinator: ObservableObject {
     func toggleCurrentCollapseVisibility() {
         switch userVisibilityIntent {
         case .collapsed:
-            revealTemporarily()
+            if collapseAttemptFailed, !isCollapsed, !isPreparingCollapse {
+                setUserVisibilityIntent(.collapsed, restarting: true)
+                physicalBootstrapGeneration = nil
+                logger.notice("menuBar.collapse.retryFromEntry")
+                requestImmediateRecollapse()
+            } else {
+                revealTemporarily()
+            }
         case .revealed:
             if wantsPersistentCollapse {
                 guard !hasChanges else {
@@ -1423,6 +1435,10 @@ final class MenuBarManagementCoordinator: ObservableObject {
             let currentApplications = runtime.applications()
             let ownedAfter = self.ownedStatusItemEvidence()
             let owned = ownedBefore == ownedAfter ? ownedAfter : nil
+            if let firstRaw, let raw,
+               !firstRaw.offscreenReplicaEvidence.isEmpty || !raw.offscreenReplicaEvidence.isEmpty {
+                self.logger.notice("menuBar.instant.replicaCorroborated before=\(firstRaw.offscreenReplicaEvidence.count, privacy: .public) after=\(raw.offscreenReplicaEvidence.count, privacy: .public)")
+            }
             let firstInventory = canReadCurrentPhysical && owned != nil ? firstRaw.flatMap {
                 MenuBarPhysicalInventoryEvidence.currentInventory(snapshot: $0,
                     applicationsBefore: applications, applicationsAfter: currentApplications,
@@ -1495,6 +1511,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
                   }),
                   let plan, let preparedInventory, let preparedTopology else {
                 self.isPreparingCollapse = false
+                self.collapseAttemptFailed = true
                 self.invalidateInstantPreparation()
                 self.logger.notice(
                     "menuBar.instant.guardRejected rawComplete=\(raw?.isComplete ?? false, privacy: .public) rawNodes=\(raw?.nodeCount ?? 0, privacy: .public) reasons=\(raw?.diagnostics.summary ?? physical?.physicalGuardDiagnostics.summary ?? "missing", privacy: .public)"
@@ -1834,12 +1851,14 @@ final class MenuBarManagementCoordinator: ObservableObject {
                     )
                 } catch {
                     self.expandLeftSide(reason: nil)
+                    self.collapseAttemptFailed = true
                     self.message = "收起未开始：\(error.localizedDescription)"
                     self.note(self.message)
                     self.automaticRecovery.cancel()
                 }
             }
         } catch {
+            collapseAttemptFailed = true
             message = "收起未开始：\(error.localizedDescription)"
             note(message)
             automaticRecovery.cancel()
@@ -1872,6 +1891,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
             )
             try PersistentMenuBarCollapseJournal.save(record, to: collapseRecordURL)
         } catch {
+            collapseAttemptFailed = true
             _ = persistentSession.planPersistenceCompleted(
                 token: token,
                 succeeded: false,
@@ -1909,7 +1929,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
                         self.releasePersistentAssertion(
                             reason: "收起失败：\(error.localizedDescription)"
                         )
-                        self.recoverAutomaticCollapseIfNeeded(reason: self.message, retryable: true)
+                        self.recoverAutomaticCollapseIfNeeded(reason: self.message, retryable: true, waitForStability: false)
                     }
                 } else {
                     guard !Task.isCancelled, self.collapseIntentIsCurrent(intentGeneration),
@@ -1934,6 +1954,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
                     self.collapseTimeoutTask = nil
                     self.isPreparingCollapse = false
                     self.isCollapsed = true
+                    self.collapseAttemptFailed = false
                     self.automaticRecovery.succeeded()
                     self.message = "系统已接受持续收起请求；从入口或本页可随时展开，实际图标以屏幕显示为准。"
                     self.note(self.message)
@@ -1945,7 +1966,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
         guard visibilityAssertion != nil else {
             _ = persistentSession.fail(token: token, reason: "系统没有创建持续收起请求。")
             releasePersistentAssertion(reason: "系统没有创建持续收起请求，保持展开。")
-            recoverAutomaticCollapseIfNeeded(reason: message, retryable: true)
+            recoverAutomaticCollapseIfNeeded(reason: message, retryable: true, waitForStability: false)
             return
         }
 
@@ -1971,7 +1992,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
                 reason: "系统收起请求 3 秒内没有确认。"
             )
             self.releasePersistentAssertion(reason: "系统收起请求超时，已展开。")
-            self.recoverAutomaticCollapseIfNeeded(reason: self.message, retryable: true)
+            self.recoverAutomaticCollapseIfNeeded(reason: self.message, retryable: true, waitForStability: false)
         }
     }
 
@@ -2016,7 +2037,8 @@ final class MenuBarManagementCoordinator: ObservableObject {
         trigger: String,
         delay: Duration = .milliseconds(850),
         continuingRecovery: Bool = false,
-        preferRetainedInventoryFastPath: Bool = false
+        preferRetainedInventoryFastPath: Bool = false,
+        waitForIdle: Bool = false
     ) {
         cancelAutomaticRecollapse(cancelRecovery: !continuingRecovery)
         guard !nativeSafetyBlocked, wantsPersistentCollapse,
@@ -2034,11 +2056,11 @@ final class MenuBarManagementCoordinator: ObservableObject {
 
         let operationID = UUID()
         let intentGeneration = visibilityIntentGeneration
-        let sleep = collapseRuntime.sleep
+        let runtime = collapseRuntime
         automaticRecollapseID = operationID
         automaticRecollapseTask = startTrackedTask { [weak self] in
             do {
-                try await sleep(delay)
+                try await runtime.sleep(delay)
             } catch {
                 return
             }
@@ -2046,6 +2068,23 @@ final class MenuBarManagementCoordinator: ObservableObject {
                   !Task.isCancelled,
                   self.automaticRecollapseID == operationID,
                   self.collapseIntentIsCurrent(intentGeneration) else { return }
+            if waitForIdle {
+                let activity = await runtime.revealActivity()
+                guard !Task.isCancelled,
+                      self.automaticRecollapseID == operationID,
+                      self.collapseIntentIsCurrent(intentGeneration),
+                      self.environmentAllowsRecollapse else { return }
+                guard activity.isReadable, !activity.pointerInsideMenuBar,
+                      !activity.hasPressedMouseButtons, !activity.hasOpenMenuOrPopover,
+                      !self.isApplying, !self.isReading, !self.isPreparingCollapse,
+                      !self.hasChanges, self.temporaryRevealInteractionIDs.isEmpty else {
+                    self.finishAutomaticRecollapse(operationID: operationID)
+                    self.logger.info("menuBar.collapseRecovery.idleDeferred readable=\(activity.isReadable, privacy: .public) pointer=\(activity.pointerInsideMenuBar, privacy: .public) buttons=\(activity.hasPressedMouseButtons, privacy: .public) menu=\(activity.hasOpenMenuOrPopover, privacy: .public)")
+                    self.recoverAutomaticCollapseIfNeeded(reason: "等待菜单栏空闲。", retryable: true)
+                    return
+                }
+                self.logger.notice("menuBar.collapseRecovery.stabilityCheck")
+            }
             if preferRetainedInventoryFastPath,
                self.canUseRetainedInventoryForExplicitRecollapse {
                 self.logger.info("menuBar.collapse.explicitFastPath selected=true")
@@ -2198,7 +2237,10 @@ final class MenuBarManagementCoordinator: ObservableObject {
         return (try? inventory.validatedLayouts()) == nil
     }
 
-    private func recoverAutomaticCollapseIfNeeded(reason: String, retryable: Bool) {
+    private func recoverAutomaticCollapseIfNeeded(
+        reason: String, retryable: Bool, waitForStability: Bool = true
+    ) {
+        collapseAttemptFailed = true
         guard automaticRecovery.isActive else { return }
         guard retryable, wantsPersistentCollapse, isEnabled, isCollapseAvailable,
               userVisibilityIntent == .collapsed,
@@ -2207,19 +2249,27 @@ final class MenuBarManagementCoordinator: ObservableObject {
             automaticRecovery.cancel()
             return
         }
-        guard let delay = automaticRecovery.nextRetryDelay() else {
+        guard let delay = automaticRecovery.nextRetryDelay(
+            waitForStability: waitForStability && permissionStatus.accessibilityGranted
+        ) else {
             message = "\(reason) 自动重试 3 次仍未就绪，当前保持展开；可在设置中查看原因并重新收起。"
             note(message)
             logger.notice("menuBar.collapseRecovery.exhausted")
             return
         }
-        message = "\(reason) 将于 \(delay.components.seconds) 秒后自动重试（\(automaticRecovery.retryCount)/3）。"
+        if automaticRecovery.isWaitingForStability {
+            message = "\(reason) 快速重试后仍未就绪，保持展开；\(delay.components.seconds) 秒后重新安全校验，稳定后自动收起。"
+            logger.notice("menuBar.collapseRecovery.waitingForStability delaySeconds=\(delay.components.seconds, privacy: .public)")
+        } else {
+            message = "\(reason) 将于 \(delay.components.seconds) 秒后自动重试（\(automaticRecovery.retryCount)/3）。"
+            logger.notice("menuBar.collapseRecovery.retry attempt=\(self.automaticRecovery.retryCount, privacy: .public)")
+        }
         physicalBootstrapGeneration = nil
         note(message)
-        logger.notice("menuBar.collapseRecovery.retry attempt=\(self.automaticRecovery.retryCount, privacy: .public)")
         scheduleSafeRecollapse(
             trigger: "等待菜单栏稳定后重试", delay: delay, continuingRecovery: true,
-            preferRetainedInventoryFastPath: explicitRecollapseGeneration == visibilityIntentGeneration
+            preferRetainedInventoryFastPath: explicitRecollapseGeneration == visibilityIntentGeneration,
+            waitForIdle: automaticRecovery.isWaitingForStability
         )
     }
 
@@ -2626,6 +2676,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
 
     private func scheduleLifecycleRecoveryAfterWake() {
         guard !isTerminating else { return }
+        logger.notice("menuBar.lifecycle.wakeRecoveryScheduled")
         lifecycleRecoveryTask?.cancel()
         lifecycleRecoveryTask = startTrackedTask { [weak self] in
             do {
@@ -2635,6 +2686,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
             }
             guard let self, !Task.isCancelled, !self.isTerminating else { return }
             self.environmentAllowsRecollapse = true
+            self.logger.notice("menuBar.lifecycle.wakeRecoveryReady persistent=\(self.wantsPersistentCollapse, privacy: .public) intentCollapsed=\(self.userVisibilityIntent == .collapsed, privacy: .public)")
             self.refreshPermissions()
             self.inventory = nil
             self.draftIDs = []
@@ -2703,6 +2755,7 @@ final class MenuBarManagementCoordinator: ObservableObject {
                         self.cancel(reason: "应用或系统状态变化，正在停止排序并释放输入。")
                     }
                     self.environmentAllowsRecollapse = false
+                    self.logger.notice("menuBar.lifecycle.suspended")
                     self.lifecycleRecoveryTask?.cancel()
                     self.lifecycleRecoveryTask = nil
                     self.invalidateInstantPreparation()

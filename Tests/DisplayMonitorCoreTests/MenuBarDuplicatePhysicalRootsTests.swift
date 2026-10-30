@@ -151,6 +151,146 @@ final class MenuBarDuplicatePhysicalRootsTests: XCTestCase {
         }
     }
 
+    func testIndependentlyConfirmedVirtualItemIsKeptInCompleteInventoryAndPlan() throws {
+        let raw = virtualReplica()
+        XCTAssertNil(current(raw), "A subset alone must never authorize reconciliation")
+        XCTAssertEqual(MenuBarPhysicalInventoryEvidence.replicaDifferenceCandidates(snapshot: raw).count, 1)
+        let proven = corroborated(raw)
+        let inventory = try XCTUnwrap(current(proven))
+        XCTAssertEqual(inventory.items.count, 7, "Keep every item, including the virtual owner")
+        XCTAssertEqual(inventory.items.filter { $0.processIdentifier == 300 }.count, 1)
+        XCTAssertEqual(try inventory.collapseTargetBundleIdentifiers(
+            protectionPolicy: .init(ownBundleIdentifier: anchor.bundleIdentifier)), ["example.left", "example.other"])
+        XCTAssertNotNil(MenuBarPhysicalInventoryEvidence(snapshot: proven, inventory: inventory))
+        XCTAssertNil(MenuBarPhysicalInventoryEvidence(snapshot: proven,
+            inventory: try XCTUnwrap(current(fixture()))), "The smaller visible view cannot silently lose the extra item")
+    }
+
+    func testCorroboratedReplicaIsIndependentOfWindowOrder() throws {
+        let raw = virtualReplica()
+        let reversed = replacing(raw, path: [], children: .value([
+            .node(path: [3]), .node(path: [2]), .node(path: [1]), .node(path: [0])]))
+        for value in [raw, reversed] {
+            let inventory = try XCTUnwrap(current(corroborated(value)))
+            XCTAssertEqual(inventory.items.count, 7)
+            XCTAssertEqual(inventory.items.filter { $0.processIdentifier == 300 }.count, 1)
+        }
+    }
+
+    func testVisibleOrMultipleOwnerItemsCannotBeTreatedAsOneVirtualEntry() {
+        let raw = virtualReplica()
+        for frames in [
+            [CGRect(x: 1_840, y: 985, width: 15, height: 30)],
+            [CGRect(x: -160, y: 20, width: 24, height: 24), CGRect(x: -200, y: 20, width: 24, height: 24)],
+            [], [CGRect(x: -160, y: 20, width: CGFloat.infinity, height: 24)],
+        ] {
+            XCTAssertNil(current(corroborated(raw, ownerFrames: frames)))
+        }
+    }
+
+    func testHitTestMustConfirmBackgroundOrExactSampledSystemButton() {
+        let raw = virtualReplica()
+        let candidate = replicaCandidate()
+        for (pid, role, frame) in [
+            (Int32(300), "AXMenuBar", CGRect(x: 1_800, y: 985, width: 1_000, height: 30)),
+            (Int32(999), "AXWindow", CGRect(x: 1_800, y: 985, width: 1_000, height: 30)),
+            (Int32(888), "AXMenuBar", CGRect(x: 1_800, y: 985, width: 1_000, height: 30)),
+            (Int32(500), "AXButton", CGRect(x: 1_840, y: 985, width: 15, height: 30)),
+        ] {
+            let hits = candidate.samplePoints.map { MenuBarReplicaHit(point: $0, processIdentifier: pid, role: role, frame: frame) }
+            XCTAssertNil(current(corroborated(raw, hits: hits)))
+        }
+        XCTAssertNil(current(corroborated(raw, hits: [])))
+    }
+
+    func testSystemOverflowButtonHitCanIndependentlyConfirmVirtualReplica() throws {
+        var raw = virtualReplica()
+        let frame = rect(x: 1_840, y: 985, width: 15)
+        raw = snapshot(nodes: raw.model.nodes + [
+            node([2, 2], pid: 500, role: .value("AXButton"), frame: .value(frame)),
+            node([3, 3], pid: 500, role: .value("AXButton"), frame: .value(frame)),
+        ])
+        raw = replacing(raw, path: [2], children: .value([
+            .node(path: [2, 0]), .node(path: [2, 1]), .node(path: [2, 2])]))
+        raw = replacing(raw, path: [3], children: .value([
+            .node(path: [3, 0]), .node(path: [3, 1]), .node(path: [3, 2]), .node(path: [3, 3])]))
+        let hits = replicaCandidate().samplePoints.map {
+            MenuBarReplicaHit(point: $0, processIdentifier: 500, role: "AXButton",
+                frame: CGRect(x: 1_840, y: 985, width: 15, height: 30))
+        }
+        let inventory = try XCTUnwrap(current(corroborated(raw, hits: hits)))
+        XCTAssertEqual(inventory.items.count, 8)
+        XCTAssertEqual(try inventory.collapseTargetBundleIdentifiers(
+            protectionPolicy: .init(ownBundleIdentifier: anchor.bundleIdentifier)), ["example.left", "example.other"])
+    }
+
+    func testStaleWrongRevisionOrChangedOwnerEvidenceRemainsRejected() {
+        let raw = virtualReplica()
+        XCTAssertNil(current(corroborated(raw, age: 3)))
+        XCTAssertNil(current(corroborated(raw, revision: "another-sample")))
+        XCTAssertNil(current(corroborated(raw, bundle: anchor.bundleIdentifier)))
+        let changedApps = applications.filter { $0.processIdentifier != 300 } + [
+            RunningAppSnapshot(bundleIdentifier: "example.changed", name: "Changed", processIdentifier: 300)]
+        XCTAssertNil(MenuBarPhysicalInventoryEvidence.currentInventory(snapshot: corroborated(raw),
+            applicationsBefore: applications, applicationsAfter: changedApps, anchor: anchor,
+            ownedStatusItems: .init(processIdentifier: 100, mainEntryVisible: true, visibleItemCount: 1)))
+    }
+
+    func testVirtualProofCannotMaskUnknownLeavesCyclesDuplicateKeysOrGeometryConflict() {
+        let raw = virtualReplica()
+        let variants = [
+            replacing(raw, path: [3, 2], role: .value("AXUnknown"), children: .value([]), removing: [[3, 2, 0]]),
+            replacing(raw, path: [3, 2], children: .value([.reference(firstPath: [3])])),
+            replacing(raw, path: [3], children: .value([
+                .node(path: [3, 0]), .node(path: [3, 1]), .node(path: [3, 2]), .reference(firstPath: [3, 2])])),
+            replacing(raw, path: [3, 0], frame: .value(rect(x: 1_821, y: 985, width: 20))),
+            replacing(raw, path: [3, 0], identifier: .value("conflict")),
+            replacing(raw, path: [3], frame: .value(rect(x: 1_800, y: 985, width: 999))),
+            replacing(raw, path: [3, 2], frame: .value(rect(x: 40, y: 0, width: 15))),
+        ]
+        for variant in variants { XCTAssertNil(current(corroborated(variant))) }
+    }
+
+    func testProofCannotRemoveAnOwnerFromEveryReplicaOrOverrideBoundaryOwnership() {
+        let raw = virtualReplica()
+        XCTAssertNil(current(corroborated(fixture())), "Evidence absent from the actual graph is rejected")
+        let wrongOwner = replacing(raw, path: [3, 2, 0], pid: 100)
+        XCTAssertTrue(MenuBarPhysicalInventoryEvidence.replicaDifferenceCandidates(snapshot: wrongOwner).isEmpty)
+        XCTAssertNil(current(corroborated(wrongOwner)))
+        let missingBoundary = replacing(raw, path: [3], children: .value([
+            .node(path: [3, 0]), .node(path: [3, 2])]), removing: [[3, 1]])
+        XCTAssertNil(current(corroborated(missingBoundary)))
+    }
+
+    private func replicaCandidate() -> MenuBarReplicaCandidate {
+        .init(processIdentifier: 300, frame: CGRect(x: 1_840, y: 985, width: 15, height: 30), identifier: nil)
+    }
+
+    private func virtualReplica() -> MenuBarRawPhysicalStructureSnapshot {
+        let value = fixture()
+        let extra = node([3, 2], pid: 500, frame: .value(rect(x: 1_840, y: 985, width: 15)),
+            children: .value([.node(path: [3, 2, 0])]))
+        let owner = node([3, 2, 0], pid: 300, opaque: true)
+        return replacing(snapshot(nodes: value.model.nodes + [extra, owner]), path: [3], children: .value([
+            .node(path: [3, 0]), .node(path: [3, 1]), .node(path: [3, 2])]))
+    }
+
+    private func corroborated(_ raw: MenuBarRawPhysicalStructureSnapshot,
+        ownerFrames: [CGRect] = [CGRect(x: -160, y: 20, width: 24, height: 24)],
+        hits: [MenuBarReplicaHit]? = nil, age: TimeInterval = 0,
+        revision: String? = nil, bundle: String = "example.other") -> MenuBarRawPhysicalStructureSnapshot {
+        let candidate = replicaCandidate()
+        let defaultHits = candidate.samplePoints.map {
+            MenuBarReplicaHit(point: $0, processIdentifier: 999, role: "AXMenuBar",
+                frame: CGRect(x: 1_800, y: 985, width: 1_000, height: 30))
+        }
+        let evidence = MenuBarOffscreenReplicaEvidence(rawRevision: revision ?? raw.revision,
+            candidate: candidate, bundleIdentifier: bundle, ownerItemFrames: ownerFrames,
+            focusedProcessIdentifier: 999, hits: hits ?? defaultHits,
+            sampledAtUptime: ProcessInfo.processInfo.systemUptime - age)
+        return .init(model: raw.model, diagnostics: raw.diagnostics, offscreenReplicaEvidence: [evidence])
+    }
+
     private func current(_ snapshot: MenuBarRawPhysicalStructureSnapshot) -> AnchoredMenuBarInventory? {
         MenuBarPhysicalInventoryEvidence.currentInventory(snapshot: snapshot,
             applicationsBefore: applications, applicationsAfter: applications, anchor: anchor,

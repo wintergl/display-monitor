@@ -32,6 +32,13 @@ struct MenuBarPhysicalInventoryEvidence: Sendable {
         else { onReject("inputOrProvider"); return nil }
         let before = Dictionary(grouping: applicationsBefore, by: \.processIdentifier)
         let after = Dictionary(grouping: applicationsAfter, by: \.processIdentifier)
+        guard snapshot.offscreenReplicaEvidence.allSatisfy({ evidence in
+            before[evidence.candidate.processIdentifier]?.count == 1
+                && after[evidence.candidate.processIdentifier]?.count == 1
+                && before[evidence.candidate.processIdentifier]?.first?.bundleIdentifier == evidence.bundleIdentifier
+                && after[evidence.candidate.processIdentifier]?.first?.bundleIdentifier == evidence.bundleIdentifier
+                && evidence.bundleIdentifier != anchor.bundleIdentifier
+        }) else { onReject("replicaOwnerChanged"); return nil }
         guard let physical = physicalItems(snapshot: snapshot) else { onReject("physicalGraph"); return nil }
         var items: [MenuBarOrderItem] = []
         var ownProxyIDs: Set<String> = []
@@ -149,11 +156,24 @@ struct MenuBarPhysicalInventoryEvidence: Sendable {
         let isProxy: Bool
     }
 
+    /// Candidates are not permission to omit anything. Independent, fresh
+    /// offscreen-owner and hit-test evidence must be supplied by the reader.
+    static func replicaDifferenceCandidates(
+        snapshot: MenuBarRawPhysicalStructureSnapshot
+    ) -> [MenuBarReplicaCandidate] {
+        var result: [MenuBarReplicaCandidate] = []
+        _ = physicalItems(snapshot: snapshot, onDifference: { result = $0 })
+        return result
+    }
+
     /// Prove every root and node before collapsing equivalent window replicas.
-    /// A repeated AXWindow may describe the same physical bar; only an exact
-    /// semantic set match permits counting its items once. Shared opaque owner
+    /// A repeated AXWindow may describe the same bar. Shared items must match
+    /// exactly; additional virtual items need independent evidence. Opaque owner
     /// references remain part of every root's proof, including across displays.
-    private static func physicalItems(snapshot: MenuBarRawPhysicalStructureSnapshot) -> [PhysicalItem]? {
+    private static func physicalItems(
+        snapshot: MenuBarRawPhysicalStructureSnapshot,
+        onDifference: ([MenuBarReplicaCandidate]) -> Void = { _ in }
+    ) -> [PhysicalItem]? {
         guard snapshot.isComplete,
               case .value(let provider) = snapshot.model.providerProcessIdentifier,
               provider > 0 else { return nil }
@@ -203,10 +223,17 @@ struct MenuBarPhysicalInventoryEvidence: Sendable {
         var canonical: [UInt32: [PhysicalItem]] = [:]
         var canonicalSemantics: [UInt32: [Key: ItemSemantics]] = [:]
         var canonicalFrames: [UInt32: CGRect] = [:]
+        var rootCounts: [UInt32: Int] = [:]
+        var corroboratedCounts: [Key: Int] = [:]
+        let corroborations = snapshot.offscreenReplicaEvidence
+        guard corroborations.allSatisfy({ $0.isValid(for: snapshot) }),
+              Set(corroborations.map(\.candidate)).count == corroborations.count else { return nil }
         for root in roots {
+            rootCounts[root.display, default: 0] += 1
             var seen: Set<[Int]> = []
             var items: [PhysicalItem] = []
             var semantics: [Key: ItemSemantics] = [:]
+            var itemKeys: Set<Key> = []
             func collect(_ path: [Int], representedProxy: Bool = false) -> Bool {
                 guard let node = nodes[path], let children = edges(node) else { return false }
                 physicalCovered.insert(path)
@@ -223,7 +250,10 @@ struct MenuBarPhysicalInventoryEvidence: Sendable {
                     }
                     guard matches.count == 1, matches[0].0 == root.display else { return false }
                     let key = Key(pid: item.pid, display: root.display, frame: item.frame)
-                    guard semantics[key] == nil else { return false }
+                    guard itemKeys.insert(key).inserted else { return false }
+                    if corroborations.contains(where: { $0.candidate.matches(item.pid, item.frame, item.identifier) }) {
+                        corroboratedCounts[key, default: 0] += 1
+                    }
                     semantics[key] = ItemSemantics(identifier: item.identifier, isProxy: item.isProxy)
                     items.append(PhysicalItem(path: path, key: key, descriptor: item))
                     for child in children where !collect(child, representedProxy: item.isProxy) { return false }
@@ -237,13 +267,47 @@ struct MenuBarPhysicalInventoryEvidence: Sendable {
             }
             guard collect(root.path) else { return nil }
             if let previous = canonicalSemantics[root.display] {
-                guard previous == semantics, canonicalFrames[root.display] == root.frame else { return nil }
+                guard canonicalFrames[root.display] == root.frame else { return nil }
+                if previous != semantics {
+                    let oldKeys = Set(previous.keys), newKeys = Set(semantics.keys)
+                    let shared = oldKeys.intersection(newKeys)
+                    guard !shared.isEmpty, (oldKeys.isSubset(of: newKeys) || newKeys.isSubset(of: oldKeys)),
+                          shared.allSatisfy({ previous[$0] == semantics[$0] }) else { return nil }
+                    let different = oldKeys.symmetricDifference(newKeys)
+                    let candidates = ((canonical[root.display] ?? []) + items)
+                        .filter { different.contains($0.key) }
+                    let sharedOwners = Set(shared.map(\.pid))
+                    guard candidates.count == different.count,
+                          candidates.allSatisfy({ !sharedOwners.contains($0.descriptor.pid) && $0.descriptor.pid != provider })
+                    else { return nil }
+                    onDifference(candidates.map {
+                        .init(processIdentifier: $0.descriptor.pid, frame: $0.descriptor.frame,
+                              identifier: $0.descriptor.identifier)
+                    })
+                    guard candidates.allSatisfy({ item in
+                        corroborations.contains { $0.candidate.matches(item.descriptor.pid, item.descriptor.frame, item.descriptor.identifier) }
+                    }) else { return nil }
+                    // Keep the complete superset, including every confirmed
+                    // virtual item. No intersection, discarded owner, or
+                    // guessed placement can enter the collapse plan.
+                    if newKeys.count > oldKeys.count {
+                        canonical[root.display] = items
+                        canonicalSemantics[root.display] = semantics
+                    }
+                }
             } else {
                 canonical[root.display] = items
                 canonicalSemantics[root.display] = semantics
                 canonicalFrames[root.display] = root.frame
             }
         }
+        // Corroboration is meaningful only for a proper subset of replicas.
+        // A single-entry owner cannot simultaneously contribute another item.
+        guard corroboratedCounts.count == corroborations.count,
+              corroboratedCounts.allSatisfy({ key, count in
+                  count > 0 && count < (rootCounts[key.display] ?? 0)
+                      && canonical.values.joined().filter({ $0.descriptor.pid == key.pid }).count == 1
+              }) else { return nil }
         // MenuBarAgent may additionally expose AXMenuBar/AXGroup aliases of
         // already-proven window items. They add no physical items of their own.
         // Global reachability alone is insufficient: every descriptor and opaque
